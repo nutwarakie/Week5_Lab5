@@ -32,6 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define CAPTURENUM 16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -47,7 +48,17 @@ DMA_HandleTypeDef hdma_tim2_ch1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+//DMA Buffer(word)
+uint32_t capturedata[CAPTURENUM] = { 0 };//CAPTURE=16
 
+//for microsecond measurement
+uint64_t _micros =0;
+
+//diff time of capture data
+int64_t DiffTime[CAPTURENUM-1] = { 0 };
+//Mean difftime
+float MeanTime =0;
+float RPM=0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,6 +70,10 @@ static void MX_TIM2_Init(void);
 static void MX_TIM5_Init(void);
 /* USER CODE BEGIN PFP */
 
+//Read speed of encoder
+void encoderSpeedReaderCycle();
+
+uint64_t micros();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -100,6 +115,16 @@ int main(void)
   MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
 
+  //start Microsec timer5
+  	HAL_TIM_Base_Start_IT(&htim5);
+
+  	//start Input capture in DMA
+  	HAL_TIM_Base_Start(&htim2);
+  	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t*) capturedata,
+  			CAPTURENUM);
+
+  	uint64_t timestamp =0;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -109,6 +134,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+	  //read Time of encoder
+		  		encoderSpeedReaderCycle();
+
+		  if(micros()-timestamp > 100000)//LED toggle 5 Hz
+		  		{
+		  			timestamp = micros();
+		  			HAL_GPIO_TogglePin(LD2_GPIO_Port,LD2_Pin);
+		  		}
   }
   /* USER CODE END 3 */
 }
@@ -333,7 +367,42 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+uint64_t micros()//function
+{
+	return _micros + htim5.Instance->CNT;
+}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)//call backเมื่อเกิดการinterrupของtimer
+{
+ if(htim == &htim5)
+ {
+	 _micros += 4294967295;
+ }
+}
 
+//Motor
+void encoderSpeedReaderCycle() {
+	//get DMA Position form number of data
+	//CapPos =ช่องที่เตรียมจะใส่ข้อมูลเมื่อเกิดevent
+	uint32_t CapPos = CAPTURENUM -  __HAL_DMA_GET_COUNTER(htim2.hdma[TIM_DMA_ID_CC1]);//ช่องที่เหลือที่ใส่ข้อมูลได้ในรอบนั้น
+	uint32_t sum = 0 ;
+
+	//calculate diff from all buffer
+	for(register int i=0 ;i < CAPTURENUM-1;i++)
+	{
+		DiffTime[i]  = capturedata[(CapPos+1+i)%CAPTURENUM]-capturedata[(CapPos+i)%CAPTURENUM];
+		//time never go back, but timer can over flow , conpensate that
+		if (DiffTime[i] <0)
+		{
+			DiffTime[i]+= 4294967295;
+		}
+		//Sum all 15 Diff
+		sum += DiffTime[i];
+	}
+
+	//mean all 15 Diff
+	MeanTime =sum / (float)(CAPTURENUM-1);
+	RPM = 60000000/(float)(12*MeanTime*64);
+}
 /* USER CODE END 4 */
 
 /**
